@@ -1,5 +1,5 @@
 # Stage 1: Build environment
-FROM python:3.14.0-rc-alpine3.19 as builder
+FROM python:3.13-alpine AS builder
 
 WORKDIR /app
 
@@ -18,7 +18,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Stage 2: Runtime environment
-FROM python:3.14.0-rc-alpine3.19
+FROM python:3.13-alpine
 
 WORKDIR /app
 
@@ -40,7 +40,7 @@ ENV UK_DICT_PATH=/app/uk_dict.txt
 RUN adduser -D -u 10001 appuser && \
     chown -R appuser:appuser /app
 
-USER 10001  # Explicit UID for Choreo compliance
+USER 10001
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
