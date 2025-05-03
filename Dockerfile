@@ -1,5 +1,5 @@
 # Stage 1: Build environment
-FROM python:3.14-rc-alpine-alpine as builder
+FROM python:3.14-rc-alpine as builder
 
 WORKDIR /app
 
