@@ -1,5 +1,5 @@
 # Stage 1: Build environment
-FROM python:3.14-rc-alpine as builder
+FROM python:3.14.0-rc-alpine3.19 as builder
 
 WORKDIR /app
 
@@ -17,7 +17,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Stage 2: Runtime environment
-FROM python:3.14-rc-alpine-alpine
+FROM python:3.14.0-rc-alpine3.19
 
 WORKDIR /app
 
