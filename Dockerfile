@@ -3,16 +3,17 @@ FROM python:3.14.0-rc-alpine3.19 as builder
 
 WORKDIR /app
 
-# Install system dependencies (required for docx2txt and others)
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends gcc python3-dev && \
-    rm -rf /var/lib/apt/lists/*
+# Install system dependencies
+RUN apk add --no-cache \
+    gcc \
+    musl-dev \
+    python3-dev
 
-# Create and activate virtual environment
+# Create virtual environment
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# Install Python dependencies
+# Install dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
@@ -21,27 +22,29 @@ FROM python:3.14.0-rc-alpine3.19
 
 WORKDIR /app
 
-# Copy virtual environment from builder
+# Copy virtual environment
 COPY --from=builder /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
 # Copy application files
 COPY . .
 
-# Copy dictionaries (adjust paths as needed)
+# Copy dictionaries
 COPY us_dict.txt uk_dict.txt ./
 
-# Set environment variables for dictionary paths
+# Set environment variables
 ENV US_DICT_PATH=/app/us_dict.txt
 ENV UK_DICT_PATH=/app/uk_dict.txt
 
-# Run as non-root user for security
-RUN useradd -m appuser && chown -R appuser:appuser /app
-USER appuser
+# Create non-root user with ID between 10000-20000
+RUN adduser -D -u 10001 appuser && \
+    chown -R appuser:appuser /app
+
+USER 10001  # Explicit UID for Choreo compliance
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
+    CMD wget -qO- http://localhost:8000/health || exit 1
 
 EXPOSE 8000
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
