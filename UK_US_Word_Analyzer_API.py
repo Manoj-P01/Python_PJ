@@ -100,13 +100,7 @@ def cleanup_tempfile(path: str):
         os.unlink(path)
 
 @app.post("/analyze", response_model=Dict[str, Any])
-async def analyze_document(
-    file: UploadFile = File(...),
-    us_dict_path = os.getenv("US_DICT_PATH", "us_dict.txt"),
-    uk_dict_path = os.getenv("UK_DICT_PATH", "uk_dict.txt") 
-    #us_dict_path: str = "D:\\UatPageall\\Elsevier\\COLSUB\\114118\\us_dict.txt",
-    #uk_dict_path: str = "D:\\UatPageall\\Elsevier\\COLSUB\\114118\\uk_dict.txt"
-):
+async def analyze_document(file: UploadFile = File(...)):
     """
     Analyze a DOCX file for UK/US word usage
     """
@@ -114,7 +108,8 @@ async def analyze_document(
         # Check file type
         if not file.filename.endswith('.docx'):
             raise HTTPException(status_code=400, detail="Only DOCX files are supported")
-        
+        us_dict_path = os.getenv("US_DICT_PATH", "us_dict.txt")
+        uk_dict_path = os.getenv("UK_DICT_PATH", "uk_dict.txt") 
         # Load dictionaries
         if not os.path.exists(us_dict_path):
             raise HTTPException(status_code=404, detail="US dictionary file not found")
@@ -134,12 +129,7 @@ async def analyze_document(
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/analyze-and-download")
-async def analyze_and_download(
-    background_tasks: BackgroundTasks,
-    file: UploadFile = File(...),
-    us_dict_path: str = "D:\\UatPageall\\Elsevier\\COLSUB\\114118\\us_dict.txt",
-    uk_dict_path: str = "D:\\UatPageall\\Elsevier\\COLSUB\\114118\\uk_dict.txt"
-):
+async def analyze_and_download(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
     """
     Analyze a DOCX file and return a text report download
     """
@@ -147,7 +137,8 @@ async def analyze_and_download(
         # Check file type
         if not file.filename.endswith('.docx'):
             raise HTTPException(status_code=400, detail="Only DOCX files are supported")
-        
+        us_dict_path = os.getenv("US_DICT_PATH", "us_dict.txt")
+        uk_dict_path = os.getenv("UK_DICT_PATH", "uk_dict.txt")
         # Load dictionaries
         if not os.path.exists(us_dict_path):
             raise HTTPException(status_code=404, detail="US dictionary file not found")
