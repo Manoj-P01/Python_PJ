@@ -6,7 +6,6 @@ import docx2txt
 from collections import defaultdict
 import os
 import tempfile
-from docx import Document
 import re
 app = FastAPI(title="UK/US Word Analyzer API")
 
