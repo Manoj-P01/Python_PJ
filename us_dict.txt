@@ -12,8 +12,6 @@ behavior
 behavioral
 behaviorists
 biased
-bonnet
-boot
 cancelation
 canceled
 capitalize
@@ -84,7 +82,6 @@ jail
 jewelry
 judgment
 judgments
-kerb
 labeled
 labeling
 labor
