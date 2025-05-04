@@ -6,6 +6,7 @@ import docx2txt
 from collections import defaultdict
 import os
 import tempfile
+from docx import Document
 import re
 app = FastAPI(title="UK/US Word Analyzer API")
 
@@ -179,7 +180,375 @@ async def analyze_and_download(
     
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+@app.post("/abbreviation")
+async def abbreviation(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...)
+):
+    try:
+        if not file.filename.endswith('.docx'):
+            raise HTTPException(status_code=400, detail="Only DOCX files are supported")
+        file_content = await file.read()
+        text = await extract_text_from_docx(file_content)
+        #extract_abbreviation_list(text)
+        responseValue = await extract_abbreviation_list(text)
+
+        return JSONResponse(content=responseValue)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+async def extract_abbreviation_list(document_content):
+    abbreviation_list = []
+    abbreviation_count = []
+    all_found_abbreviations = set()
+
+    pattern = r"(([A-Z]+ [0-9]+)|\b([A-Z]+(-?[A-Z0-9]+)*(s)?)\b)|([a-z]*[A-Z][a-z]*)+"
+    matches = re.findall(pattern, document_content)
+
+    for match_group in matches:
+        found_abbreviation = next((m for m in match_group if m), "").strip()
+        found_abbreviation = re.sub(r"[^-a-zA-Z0-9 ]", "", found_abbreviation)
+        found_abbreviation = re.sub(r"(^[- ]|[- ]$)", "", found_abbreviation)
+
+        if found_abbreviation.endswith("s"):
+            found_abbreviation = found_abbreviation[:-1]
+
+        if (2 < len(found_abbreviation) <= 6 and
+                len(re.findall(r"[A-Z]", found_abbreviation)) > 1 and
+                found_abbreviation not in all_found_abbreviations):
+
+            count_pattern = rf"\b{re.escape(found_abbreviation)}s?\b"
+            count = len(re.findall(count_pattern, document_content))
+
+            abbreviation_list.append(found_abbreviation)
+            abbreviation_count.append(count)
+            all_found_abbreviations.add(found_abbreviation)
+
+    expansion_array, _ = resolve_search_priority(abbreviation_list, document_content)
+
+    # Assemble the desired response format
+    result = []
+    for idx, abbr in enumerate(abbreviation_list):
+        expansion = expansion_array[idx] if idx < len(expansion_array) else ""
+        expansion = expansion.lstrip('|').split('|')[0] if expansion else ""
+        result.append({
+            "abbreviation": abbr,
+            "full_form": expansion,
+            "occurrences": abbreviation_count[idx]
+        })
+
+    return {"abbreviations_found": result}
+
+def resolve_search_priority(abbreviation_list, document_full_content):
+    """
+    Resolves abbreviation expansions from the document and/or database based on search_priority.
+
+    :param abbreviation_list: List of abbreviations.
+    :param document_full_content: The full document text.
+    :param search_priority: 'both', 'doc', or 'db'.
+    :param get_expansion_from_document: Function to get expansions from the document.
+    :param get_expansion_from_database: Function to get expansions from the database.
+    :return: Tuple of (expansion_array_from_doc, expansion_array_from_db)
+    """
+
+    expansion_array = [''] * (len(abbreviation_list) + 1)
+    db_expansion_array = [''] * (len(abbreviation_list) + 1)
+
+    try:
+        expansion_array = get_expansion_from_document(abbreviation_list, document_full_content)
+
+    except Exception as e:
+        print(f"Error resolving abbreviation expansions: {e}")
+
+    return expansion_array, db_expansion_array
+def get_expansion_from_document(abbreviation_list, document_full_content):
+    """
+    Retrieves possible expansions for abbreviations from the document content.
+
+    :param abbreviation_list: List of abbreviations (e.g. ['NASA', 'WHO']).
+    :param document_full_content: The full document text.
+    :return: List of expansions (same length as abbreviation_list + 1).
+    """
+    try:
+        # Initialize expansion list (+1 for compatibility with original C# structure)
+        expansion_array = [''] * (len(abbreviation_list) + 1)
+
+        # Retrieve expansions using a custom heuristic
+        expansion_array = new_approach_retrieve_expansion(abbreviation_list, document_full_content, expansion_array)
+
+        # Add XML tags or formatting
+        #expansion_array = add_xml_tags(expansion_array, document_full_content)
+
+        return expansion_array
+
+    except Exception as e:
+        print(f"Error in get_expansion_from_document: {e}")
+        return [''] * (len(abbreviation_list) + 1)
+def new_approach_retrieve_expansion(abbreviation_list, document_text, expansion_array=None):
+    if expansion_array is None:
+        expansion_array = [''] * (len(abbreviation_list) + 1)
+
+    preposition_list = 'at|by|for|of|in|on|to|and|the|at'
+    list_of_all_expansions = set()
+
+    for idx in range(1, len(abbreviation_list)):
+        abbr = abbreviation_list[idx]
+        filtered_text = ''
+        is_expansion = False
+
+        if len(abbr) > 2:
+            # Try abbreviation as-is (e.g., "World Health Organization (WHO)")
+            filtered_text = new_approach_expansion_as_is_form(document_text, abbr, preposition_list)
+            filtered_text = clean_surrounding_nonword(filtered_text)
+
+            if filtered_text and filtered_text not in list_of_all_expansions:
+                list_of_all_expansions.add(filtered_text)
+                expansion_array[idx] += f"|{filtered_text.strip()}"
+            else:
+                pattern = search_pattern_1(abbr, preposition_list) if re.search(r'[a-z]', abbr) else search_pattern(abbr, preposition_list)
+                matches = re.findall(pattern, document_text, flags=re.IGNORECASE)
+
+                for match in matches:
+                    filtered_text = clean_surrounding_nonword(match)
+                    if not filtered_text or filtered_text in list_of_all_expansions:
+                        continue
+
+                    s_text = filtered_text
+                    if s_text.lower().startswith(abbr.lower()):
+                        s_text = s_text[len(abbr):].strip()
+
+                    if len(s_text) > len(abbr):
+                        i_pos = 0
+                        is_expansion = True
+                        for c in abbr:
+                            found = re.search(re.escape(c), s_text[i_pos:], flags=re.IGNORECASE)
+                            if found:
+                                i_pos += found.start() + 1
+                            else:
+                                is_expansion = False
+                                break
+
+                        if is_expansion:
+                            list_of_all_expansions.add(filtered_text)
+                            expansion_array[idx] += f"|{filtered_text.strip()}"
+                            break
+        elif len(abbr) == 2:
+            filtered_text = new_approach_expansion_as_is_form(document_text, abbr, preposition_list)
+            filtered_text = clean_surrounding_nonword(filtered_text)
+
+            if filtered_text and filtered_text not in list_of_all_expansions:
+                s_text = filtered_text
+                if s_text.lower().startswith(abbr.lower()):
+                    s_text = s_text[len(abbr):].strip()
+
+                if len(s_text) > len(abbr):
+                    i_pos = 0
+                    is_expansion = True
+                    for c in abbr:
+                        found = re.search(re.escape(c), s_text[i_pos:], flags=re.IGNORECASE)
+                        if found:
+                            i_pos += found.start() + 1
+                        else:
+                            is_expansion = False
+                            break
+
+                    if is_expansion:
+                        list_of_all_expansions.add(filtered_text)
+                        expansion_array[idx] += f"|{filtered_text.strip()}"
+                    else:
+                        expansion_array[idx] = ""
+                else:
+                    expansion_array[idx] = ""
+            else:
+                expansion_array[idx] = ""
+
+    filter_searched_expansion(expansion_array, abbreviation_list, document_text)
+    return expansion_array
+def filter_searched_expansion(expansion_array: list[str], abbreviation_list: list[str], document_full_content: str) -> None:
+    # 1. Filter based on casing
+    for i in range(1, len(expansion_array)):
+        if expansion_array[i]:
+            split_expansion = expansion_array[i].split('|')
+            filtered_text = ""
+            for item in split_expansion[1:]:
+                temp_string = re.sub(r"[a-z\W]", "", item)
+                if temp_string == abbreviation_list[i]:
+                    filtered_text += "|" + item
+            if filtered_text:
+                expansion_array[i] = filtered_text
+
+    # 2. Filter based on same paragraph presence
+    split_para = document_full_content.split('\n')
+    for i in range(1, len(expansion_array)):
+        if expansion_array[i]:
+            split_expansion = expansion_array[i].split('|')
+            if len(split_expansion) > 2:
+                filtered_text = ""
+                for item in split_expansion[1:]:
+                    for para in split_para:
+                        if (re.search(r"\W" + re.escape(item) + r"\W", para, re.IGNORECASE) and
+                            re.search(r"\W" + re.escape(abbreviation_list[i]) + r"\W", para)):
+                            filtered_text += "|" + item
+                            break  # Stop searching after the first matching paragraph
+                expansion_array[i] = filtered_text if filtered_text else ""
+
+def new_approach_expansion_as_is_form(previous_text, abbreviation, preposition_list):
+    filtered_text = ''
     
+    # Build the pattern for expansion
+    pattern = build_single_word_regex_pattern(abbreviation, preposition_list)
+
+    # Try pattern like: expansion text + abbreviation (e.g., World Health Organization (WHO))
+    pattern_temp = rf"{pattern}(\W)+{re.escape(abbreviation)}(s)?(\W)+"
+    match = re.search(pattern_temp, previous_text, re.IGNORECASE)
+    
+    if match:
+        filtered_text = match.group(0)
+        filtered_text = re.sub(rf"\({re.escape(abbreviation)}\)", "", filtered_text, flags=re.IGNORECASE)
+    else:
+        # Try pattern like: abbreviation + expansion (e.g., WHO (World Health Organization))
+        pattern_temp = rf"{re.escape(abbreviation)}(\W)*{pattern}(\W)+"
+        match = re.search(pattern_temp, previous_text, re.IGNORECASE)
+        if match:
+            filtered_text = match.group(0)
+            filtered_text = re.sub(re.escape(abbreviation), "", filtered_text, flags=re.IGNORECASE)
+    
+    if not filtered_text:
+        # Try pattern like: expansion , abbreviation
+        pattern_temp = rf"{pattern}(\W)*,{re.escape(abbreviation)}"
+        match = re.search(pattern_temp, previous_text, re.IGNORECASE)
+        if match:
+            filtered_text = match.group(0)
+
+    # Clean abbreviation from result
+    if filtered_text:
+        filtered_text = re.sub(rf"(\W)?{re.escape(abbreviation)}(s)?(\W)?", "", filtered_text, flags=re.IGNORECASE)
+
+    return filtered_text.strip()
+def build_single_word_regex_pattern(abbreviation: str, preposition_list: str) -> str:
+    abbr_chars = list(abbreviation)
+    pattern = (
+        f"[{abbr_chars[0].upper()}{abbr_chars[0].lower()}][a-zA-Z\\-]+(\\s)?"
+        f"({preposition_list})?(\\s)?"
+    )
+
+    for i in range(1, len(abbr_chars)):
+        ch = abbr_chars[i]
+
+        if i < len(abbr_chars) - 1:
+            if re.match(r"[0-9]", ch):
+                pattern += (
+                    f"([{ch.upper()}][a-z\\-\\'\\’]*)(\\s)?"
+                    f"({preposition_list})?(\\s)?"
+                )
+            elif re.match(r"[- ]", ch):
+                pattern += (
+                    f"([{ch.upper()}][a-z\\-\\'\\’]*)?(\\s)?"
+                    f"({preposition_list})?(\\s)?"
+                )
+            else:
+                pattern += (
+                    f"[{ch.upper()}{ch.lower()}][a-z\\-\\'\\’]+(\\s)?"
+                    f"({preposition_list})?(\\s)?"
+                )
+        else:
+            if re.match(r"[- 0-9]", ch):
+                pattern += f"([{ch.upper()}][a-z\\-\\'\\’]*)"
+            else:
+                pattern += f"[{ch.upper()}{ch.lower()}][a-z\\-\\'\\’]+"
+
+    pattern = "(\\W)" + pattern
+    return pattern
+def clean_surrounding_nonword(text):
+    if not text:
+        return ""
+    return re.sub(r"^\W+|\W+$", "", text)
+def search_pattern_1(abbreviation: str, preposition_list: str) -> str:
+    abbr_chars = list(abbreviation)
+    pattern = (
+        f"[{abbr_chars[0].upper()}{abbr_chars[0].lower()}][a-z\\'\\’\\-]*"
+        f"({preposition_list})?"
+    )
+
+    for i in range(1, len(abbr_chars)):
+        ch = abbr_chars[i]
+
+        if i < len(abbr_chars) - 1:
+            if re.match(r"[0-9]", ch):
+                pattern += (
+                    f"(\\s)?([{ch.upper()}][a-z\\'\\’\\-]*)"
+                    f"({preposition_list})?(\\s)?"
+                )
+            elif re.match(r"[- ]", ch):
+                pattern += (
+                    f"(\\s)?([{ch.upper()}][a-z\\'\\’\\-]*)?"
+                    f"({preposition_list})?(\\s)?"
+                )
+            else:
+                pattern += (
+                    f"(\\s)?[{ch.upper()}{ch.lower()}][a-z\\'\\’\\-]*"
+                    f"({preposition_list})?(\\s)?"
+                )
+        else:
+            if re.match(r"[0-9]", ch):
+                pattern += (
+                    f"(\\s)?([{ch.lower()}][a-zA-Z\\-\\'\\’]*)(\\W)"
+                )
+            elif re.match(r"[- ]", ch):
+                pattern += (
+                    f"(\\s)?([{ch.lower()}][a-zA-Z\\-\\'\\’]*)?(\\W)"
+                )
+            else:
+                pattern += (
+                    f"(\\s)?[{ch.upper()}{ch.lower()}][a-z\\-\\'\\’]*(\\W)"
+                )
+
+    pattern = r"(\W)" + pattern
+    return pattern
+def search_pattern(abbreviation: str, preposition_list: str) -> str:
+    abbr_chars = list(abbreviation)
+    
+    # Start the pattern with the first character's word
+    pattern = (
+        f"[{abbr_chars[0].upper()}{abbr_chars[0].lower()}][a-zA-Z\\'\\’\\-]+"
+        f"({preposition_list})?"
+    )
+
+    for i in range(1, len(abbr_chars)):
+        ch = abbr_chars[i]
+
+        if i < len(abbr_chars) - 1:
+            if re.match(r"[0-9]", ch):
+                pattern += (
+                    f"(\\s)?([{ch.upper()}][a-z\\'\\’\\-]*)"
+                    f"({preposition_list})?(\\s)?"
+                )
+            elif re.match(r"[- ]", ch):
+                pattern += (
+                    f"(\\s)?([{ch.upper()}][a-z\\'\\’\\-]*)?"
+                    f"({preposition_list})?(\\s)?"
+                )
+            else:
+                pattern += (
+                    f"(\\s)+[{ch.upper()}{ch.lower()}][a-z\\'\\’\\-]+"
+                    f"({preposition_list})?(\\s)?"
+                )
+        else:
+            if re.match(r"[0-9]", ch):
+                pattern += (
+                    f"(\\s)?([{ch.lower()}][a-zA-Z\\-\\'\\’]*)(\\W)"
+                )
+            elif re.match(r"[- ]", ch):
+                pattern += (
+                    f"(\\s)?([{ch.lower()}][a-zA-Z\\-\\'\\’]*)?(\\W)"
+                )
+            else:
+                pattern += (
+                    f"(\\s)+[{ch.upper()}{ch.lower()}][a-zA-Z\\-\\'\\’]+(\\W)"
+                )
+
+    pattern = r"(\W)" + pattern
+    return pattern
+
 @app.get("/health")
 def health_check():
     return {"status": "ok"}
